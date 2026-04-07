@@ -1,0 +1,38 @@
+MIT License
+
+Copyright (c) 2024 MedML-Ops Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+IMPORTANT MEDICAL DISCLAIMER:
+
+This software is provided for educational and research purposes only. It is
+NOT intended, designed, or certified for use as a medical device or clinical
+decision support tool. Any use of this software for clinical diagnosis or
+treatment decisions is done entirely at the user's own risk and responsibility.
+
+This software has NOT been cleared or approved by the U.S. Food and Drug
+Administration (FDA) or any other regulatory body for clinical use.
+
+The GMLP compliance framework, PCCP templates, and regulatory documentation
+included in this repository are provided as educational examples only and do
+NOT constitute legal or regulatory advice. Consult qualified regulatory
+professionals before submitting any medical device for FDA review.

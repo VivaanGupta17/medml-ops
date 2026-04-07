@@ -1,0 +1,78 @@
+# =============================================================================
+# MedML-Ops Training Container
+# =============================================================================
+# Multi-stage build for reproducible medical ML training environment.
+# Pinned base image for regulatory traceability (GMLP Principle 2).
+#
+# Build:   docker build -f Dockerfile.train -t medml-ops/training:latest .
+# Run:     docker run --rm -v $(pwd):/workspace medml-ops/training:latest \
+#              python scripts/run_pipeline.py --config configs/pipeline_config.yaml
+# =============================================================================
+
+FROM python:3.10.14-slim-bookworm AS base
+
+LABEL maintainer="MedML-Ops Team"
+LABEL description="FDA GMLP-compliant medical ML training environment"
+LABEL gmlp_compliant="true"
+LABEL base_image="python:3.10.14-slim-bookworm"
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    build-essential \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security (GMLP Principle 2)
+RUN groupadd --gid 1001 mluser && \
+    useradd --uid 1001 --gid mluser --shell /bin/bash --create-home mluser
+
+WORKDIR /workspace
+
+# ---------------------------------------------------------------------------
+# Dependency installation stage
+# ---------------------------------------------------------------------------
+FROM base AS deps
+
+COPY requirements.txt .
+
+# Install Python dependencies with hash verification for supply chain security
+RUN pip install --no-cache-dir --upgrade pip==24.0 && \
+    pip install --no-cache-dir -r requirements.txt
+
+# ---------------------------------------------------------------------------
+# Application stage
+# ---------------------------------------------------------------------------
+FROM deps AS app
+
+# Copy source code
+COPY src/ ./src/
+COPY configs/ ./configs/
+COPY scripts/ ./scripts/
+COPY setup.py .
+COPY README.md .
+
+# Install package in editable mode
+RUN pip install --no-cache-dir -e .
+
+# Set ownership
+RUN chown -R mluser:mluser /workspace
+
+USER mluser
+
+# Environment variables for reproducibility
+ENV PYTHONHASHSEED=0
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV MLFLOW_TRACKING_URI=/workspace/mlruns
+
+# Volumes for data, models, and artifacts
+VOLUME ["/workspace/data", "/workspace/models", "/workspace/mlruns", "/workspace/logs"]
+
+# Health check: verify environment is functional
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import mlflow; import sklearn; print('Training env healthy')" || exit 1
+
+ENTRYPOINT ["python"]
+CMD ["scripts/run_pipeline.py", "--help"]

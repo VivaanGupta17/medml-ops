@@ -1,0 +1,79 @@
+# =============================================================================
+# MedML-Ops Model Serving Container
+# =============================================================================
+# Minimal production serving image with FastAPI inference server.
+# Hardened for production: non-root user, no build tools, health probes.
+#
+# Build:   docker build -f Dockerfile.serve -t medml-ops/serving:latest .
+# Run:     docker run -p 8000:8000 -v $(pwd)/models:/models \
+#              -e MODEL_PATH=/models/current \
+#              medml-ops/serving:latest
+# =============================================================================
+
+FROM python:3.10.14-slim-bookworm AS base
+
+LABEL maintainer="MedML-Ops Team"
+LABEL description="MedML-Ops FastAPI inference server"
+LABEL gmlp_compliant="true"
+
+# Minimal system dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user
+RUN groupadd --gid 1001 mluser && \
+    useradd --uid 1001 --gid mluser --shell /bin/bash --create-home mluser
+
+WORKDIR /app
+
+# ---------------------------------------------------------------------------
+# Install serving dependencies (subset of full requirements)
+# ---------------------------------------------------------------------------
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir --upgrade pip==24.0 && \
+    pip install --no-cache-dir \
+        fastapi>=0.100.0 \
+        uvicorn[standard]>=0.23.0 \
+        pydantic>=2.0.0 \
+        numpy>=1.24.0 \
+        scikit-learn>=1.3.0 \
+        joblib>=1.3.0 \
+        mlflow>=2.0.0 \
+        pandas>=2.0.0
+
+# ---------------------------------------------------------------------------
+# Application
+# ---------------------------------------------------------------------------
+COPY src/deployment/model_server.py ./src/deployment/model_server.py
+COPY src/__init__.py ./src/__init__.py 2>/dev/null || true
+COPY src/deployment/__init__.py ./src/deployment/__init__.py 2>/dev/null || true
+
+# Create log directory
+RUN mkdir -p /app/logs && chown -R mluser:mluser /app
+
+USER mluser
+
+# Environment defaults (override at runtime)
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV MODEL_PATH=/models/current
+ENV MODEL_VERSION=latest
+ENV MODEL_NAME=medml_classifier
+ENV CONFIDENCE_THRESHOLD=0.5
+ENV LOG_PREDICTIONS=true
+ENV PREDICTION_LOG_PATH=/app/logs/predictions.jsonl
+
+# Volumes
+VOLUME ["/models", "/app/logs"]
+
+EXPOSE 8000
+
+# Kubernetes-compatible health probes
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/health/live || exit 1
+
+ENTRYPOINT ["uvicorn", "src.deployment.model_server:app"]
+CMD ["--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

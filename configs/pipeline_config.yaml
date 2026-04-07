@@ -1,0 +1,238 @@
+# =============================================================================
+# MedML-Ops Pipeline Configuration
+# =============================================================================
+# Full pipeline configuration for a binary medical AI classification model.
+# Copy this file and customize for each experiment.
+#
+# Usage:
+#   python scripts/run_pipeline.py --config configs/pipeline_config.yaml
+#   make pipeline CONFIG=configs/pipeline_config.yaml
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Experiment Identity
+# ---------------------------------------------------------------------------
+experiment:
+  name: "medml_chest_xray_classifier"
+  description: "Pulmonary nodule detection — chest X-ray"
+  intended_use: "AI-assisted screening for pulmonary nodules in chest radiographs"
+  device_class: "Class II"
+  regulatory_pathway: "510(k)"
+  version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# Data Configuration
+# ---------------------------------------------------------------------------
+data:
+  # Paths (relative to project root or absolute)
+  train_path: "data/train.csv"
+  validation_path: "data/validation.csv"
+  test_path: "data/test.csv"
+  reference_schema_path: "configs/schema_reference.json"
+  dicom_dir: ""  # Optional: path to DICOM directory for metadata validation
+
+  # Column definitions
+  label_column: "label"
+  patient_id_column: "patient_id"
+  feature_columns: []  # Empty = auto-detect all numeric columns
+  demographic_columns:
+    - "age_group"
+    - "sex"
+    - "ethnicity"
+
+  # Dataset versioning (for GMLP data provenance)
+  dataset_name: "RSNA Pulmonary Dataset"
+  dataset_version: "v2.1"
+  dataset_source: "RSNA 2024 Challenge / institutional IRB study"
+
+# ---------------------------------------------------------------------------
+# Data Validation
+# ---------------------------------------------------------------------------
+data_validation:
+  enabled: true
+  fail_on_error: true        # Stop pipeline if validation errors found
+  fail_on_drift: false       # Warn (don't stop) on drift detection
+  outlier_z_threshold: 3.5
+  drift_p_value_threshold: 0.05
+  psi_warning_threshold: 0.10
+  psi_alert_threshold: 0.25
+
+  # Schema enforcement
+  schema:
+    required_columns:
+      - "patient_id"
+      - "label"
+    column_ranges:
+      age: [0, 120]
+    max_missing_fraction:
+      label: 0.0          # Zero missing labels allowed
+      age: 0.05
+    unique_key_columns:
+      - "patient_id"
+
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+training:
+  # Random seed — MUST be logged for GMLP reproducibility
+  random_seed: 42
+
+  # Model type: "random_forest" | "xgboost" | "logistic" | "gradient_boosting"
+  model_type: "random_forest"
+
+  # Default model params (overridden by HPO if enabled)
+  model_params:
+    n_estimators: 500
+    max_depth: 10
+    class_weight: "balanced"
+
+  # Split strategy
+  test_size: 0.20
+  val_size: 0.15
+  cv_strategy: "stratified"  # "stratified" | "group" | "stratified_group"
+  n_cv_folds: 5
+  group_column: "patient_id"  # Use patient-level splits to prevent leakage
+
+  # Hyperparameter optimization
+  hpo:
+    enabled: true
+    n_trials: 50
+    timeout_seconds: 3600
+    metric: "val_auroc"
+    direction: "maximize"
+
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
+evaluation:
+  bootstrap_n: 1000
+  n_calibration_bins: 10
+  sensitivity_targets:
+    - 0.85
+    - 0.90
+    - 0.95
+
+  # Predicate device performance for 510(k) substantial equivalence
+  predicate_device:
+    name: ""  # e.g., "ClearRead CT Detect" or leave blank
+    auroc: null
+    sensitivity: null
+    specificity: null
+
+  # Regression test settings
+  regression_testing:
+    enabled: true
+    golden_test_set_path: "data/golden_test_set.csv"
+    baseline_predictions_path: "data/baseline_predictions.json"
+    acceptance_criteria:
+      auroc_degradation_error: 0.02
+      auroc_degradation_critical: 0.05
+      f1_degradation_error: 0.03
+      sensitivity_degradation_error: 0.03
+      auroc_minimum: 0.75
+      sensitivity_minimum: 0.80
+      specificity_minimum: 0.70
+
+# ---------------------------------------------------------------------------
+# Bias Analysis
+# ---------------------------------------------------------------------------
+bias_analysis:
+  enabled: true
+  sensitive_attributes:
+    - "age_group"
+    - "sex"
+    - "ethnicity"
+  reference_groups:
+    sex: "M"
+    ethnicity: "White"
+  min_subgroup_size: 30
+  decision_threshold: 0.5
+  high_risk_threshold: 0.10  # Fairness gap threshold for HIGH flag
+
+# ---------------------------------------------------------------------------
+# MLflow Tracking
+# ---------------------------------------------------------------------------
+mlflow:
+  tracking_uri: "mlruns"         # Local: "mlruns" | Remote: "http://mlflow:5000"
+  artifact_uri: ""               # Empty = use tracking server default
+  register_model: true
+  model_registry_name: "medml_classifier"
+  experiment_tags:
+    team: "ML Engineering"
+    project: "medml-ops"
+
+# ---------------------------------------------------------------------------
+# Deployment
+# ---------------------------------------------------------------------------
+deployment:
+  model_path: "models/current"
+  server_host: "0.0.0.0"
+  server_port: 8000
+  workers: 1
+  confidence_threshold: 0.5
+  log_predictions: true
+  prediction_log_path: "logs/predictions.jsonl"
+  max_batch_size: 100
+
+# ---------------------------------------------------------------------------
+# Monitoring
+# ---------------------------------------------------------------------------
+monitoring:
+  enabled: true
+  monitor_port: 8001
+
+  # Drift thresholds
+  psi_warning: 0.10
+  psi_alert: 0.25
+  ks_p_value_threshold: 0.05
+  drift_share_warning: 0.20
+  drift_share_alert: 0.50
+
+  # Alerting
+  alert_email: ""           # Optional: email for drift alerts
+  alert_webhook: ""         # Optional: Slack/Teams webhook
+
+  # Monitoring schedule (for cron-based monitoring)
+  check_interval_hours: 24
+
+# ---------------------------------------------------------------------------
+# Compliance
+# ---------------------------------------------------------------------------
+compliance:
+  gmlp:
+    enabled: true
+    output_path: "compliance/gmlp_audit.json"
+    minimum_score: 0.80       # Score required for submission readiness
+
+  pccp:
+    enabled: true
+    specification_path: "compliance/pccp_specification.json"
+    change_log_path: "compliance/pccp_change_log.json"
+    baseline_auroc: 0.90      # Used to set PCCP performance floors
+
+  model_card:
+    output_html: "docs/model_card.html"
+    output_json: "compliance/model_card.json"
+
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+reporting:
+  output_dir: "reports/"
+  formats:
+    - "json"
+    - "html"
+  include_bias_report: true
+  include_gmlp_audit: true
+  include_model_card: true
+  include_drift_report: true
+
+# ---------------------------------------------------------------------------
+# Paths & Output
+# ---------------------------------------------------------------------------
+paths:
+  models_dir: "models/"
+  reports_dir: "reports/"
+  compliance_dir: "compliance/"
+  logs_dir: "logs/"
+  artifacts_dir: "artifacts/"

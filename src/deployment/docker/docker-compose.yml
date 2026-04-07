@@ -1,0 +1,198 @@
+version: "3.9"
+
+# =============================================================================
+# MedML-Ops Full Pipeline Orchestration
+# =============================================================================
+# Starts the complete MLOps stack:
+#   - MLflow Tracking Server  → http://localhost:5000
+#   - FastAPI Inference Server → http://localhost:8000
+#   - Drift Monitor            → http://localhost:8001
+#   - PostgreSQL (MLflow store)
+#   - MinIO (S3-compatible artifact store)
+#
+# Usage:
+#   docker-compose up --build          # Start full stack
+#   docker-compose up mlflow serving   # Start specific services
+#   docker-compose run --rm training python scripts/run_pipeline.py
+# =============================================================================
+
+networks:
+  medml-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  minio-data:
+  mlruns-data:
+  models-data:
+  logs-data:
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+
+services:
+
+  # ---- PostgreSQL (MLflow backend store) ----------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: medml-postgres
+    networks: [medml-network]
+    environment:
+      POSTGRES_DB: mlflow
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow_secret}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---- MinIO (S3-compatible artifact store) --------------------------------
+  minio:
+    image: minio/minio:RELEASE.2024-01-01T00-00-00Z
+    container_name: medml-minio
+    networks: [medml-network]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_secret_key}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO console
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # ---- MLflow Tracking Server ---------------------------------------------
+  mlflow:
+    image: python:3.10.14-slim-bookworm
+    container_name: medml-mlflow
+    networks: [medml-network]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: >
+      bash -c "
+        pip install --quiet mlflow[extras] psycopg2-binary boto3 &&
+        mlflow server
+          --host 0.0.0.0
+          --port 5000
+          --backend-store-uri postgresql://mlflow:${POSTGRES_PASSWORD:-mlflow_secret}@postgres:5432/mlflow
+          --default-artifact-root s3://mlflow-artifacts/
+          --serve-artifacts
+      "
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio_admin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minio_secret_key}
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # ---- Training Container (run-once job) ----------------------------------
+  training:
+    build:
+      context: ../../..
+      dockerfile: src/deployment/docker/Dockerfile.train
+    container_name: medml-training
+    networks: [medml-network]
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minio_admin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minio_secret_key}
+      PYTHONHASHSEED: "0"
+    volumes:
+      - ./../../..:/workspace
+      - models-data:/workspace/models
+      - logs-data:/workspace/logs
+    profiles:
+      - training  # Only start with: docker-compose --profile training up
+
+  # ---- FastAPI Inference Server -------------------------------------------
+  serving:
+    build:
+      context: ../../..
+      dockerfile: src/deployment/docker/Dockerfile.serve
+    container_name: medml-serving
+    networks: [medml-network]
+    environment:
+      MODEL_PATH: /models/current
+      MODEL_NAME: medml_classifier
+      MODEL_VERSION: latest
+      CONFIDENCE_THRESHOLD: "0.5"
+      LOG_PREDICTIONS: "true"
+      PREDICTION_LOG_PATH: /app/logs/predictions.jsonl
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - models-data:/models
+      - logs-data:/app/logs
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+  # ---- Drift Monitor (lightweight service) --------------------------------
+  drift-monitor:
+    image: python:3.10.14-slim-bookworm
+    container_name: medml-drift-monitor
+    networks: [medml-network]
+    command: >
+      bash -c "
+        pip install --quiet fastapi uvicorn evidently pandas scipy &&
+        uvicorn src.monitoring.drift_monitor:app
+          --host 0.0.0.0
+          --port 8001
+      "
+    volumes:
+      - ./../../..:/workspace
+      - logs-data:/workspace/logs
+    working_dir: /workspace
+    ports:
+      - "8001:8001"
+    environment:
+      PREDICTION_LOG_PATH: /workspace/logs/predictions.jsonl
+    restart: unless-stopped
+    depends_on:
+      - serving
+
+# ---------------------------------------------------------------------------
+# Usage examples (run from project root):
+#
+#   Full stack:
+#     docker-compose -f src/deployment/docker/docker-compose.yml up
+#
+#   Training run only:
+#     docker-compose -f src/deployment/docker/docker-compose.yml --profile training \
+#       run --rm training python scripts/run_pipeline.py \
+#       --config configs/pipeline_config.yaml
+#
+#   Serving + monitoring only:
+#     docker-compose -f src/deployment/docker/docker-compose.yml up serving drift-monitor
+# ---------------------------------------------------------------------------

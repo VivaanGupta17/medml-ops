@@ -210,3 +210,6 @@ version:  ## Show installed package versions
 	$(PYTHON) -c "import sklearn; print(f'scikit-learn: {sklearn.__version__}')"
 	$(PYTHON) -c "import fastapi; print(f'FastAPI: {fastapi.__version__}')"
 	$(PYTHON) -c "import pandas; print(f'pandas: {pandas.__version__}')"
+
+lint:
+	ruff check src/

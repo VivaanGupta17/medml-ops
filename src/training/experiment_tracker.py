@@ -193,8 +193,23 @@ class GMLPExperimentTracker:
         self._start_time = time.time()
 
         if MLFLOW_AVAILABLE:
-            mlflow.set_tracking_uri(self.tracking_uri)
-            mlflow.set_experiment(self.experiment_name)
+            # retry connection on transient network errors (common with remote tracking servers)
+            _retries = int(os.environ.get("MLFLOW_CONNECT_RETRIES", "3"))
+            for _attempt in range(1, _retries + 1):
+                try:
+                    mlflow.set_tracking_uri(self.tracking_uri)
+                    mlflow.set_experiment(self.experiment_name)
+                    break
+                except Exception as _conn_err:
+                    if _attempt < _retries:
+                        logger.warning(
+                            "MLflow connect attempt %d/%d failed: %s — retrying in %ds",
+                            _attempt, _retries, _conn_err, 2 ** _attempt,
+                        )
+                        time.sleep(2 ** _attempt)
+                    else:
+                        logger.error("MLflow connection failed after %d attempts", _retries)
+                        raise
 
             default_tags = {
                 "gmlp_compliant": "true",

@@ -559,3 +559,5 @@ try:
 
 except ImportError:
     pass
+
+# PSI > 0.25 indicates significant drift per FDA guidance

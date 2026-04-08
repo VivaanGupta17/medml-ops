@@ -59,6 +59,7 @@ logger = logging.getLogger(__name__)
 MODEL_PATH = os.environ.get("MODEL_PATH", "models/current")
 MODEL_NAME = os.environ.get("MODEL_NAME", "medml_classifier")
 MODEL_VERSION = os.environ.get("MODEL_VERSION", "latest")
+MODEL_REGISTRY_PATH = os.environ.get("MODEL_REGISTRY_PATH", "mlruns/")
 CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.5"))
 LOG_PREDICTIONS = os.environ.get("LOG_PREDICTIONS", "true").lower() == "true"
 PREDICTION_LOG_PATH = os.environ.get("PREDICTION_LOG_PATH", "logs/predictions.jsonl")
@@ -171,9 +172,23 @@ class ModelRegistry:
 
         try:
             if MLFLOW_AVAILABLE and not Path(model_path).exists():
-                # Try MLflow model URI
-                model = mlflow.pyfunc.load_model(model_path)
-                logger.info("Loaded MLflow model: %s", model_path)
+                # Try MLflow model URI — retry on transient connection errors
+                _mlflow_retries = int(os.environ.get("MLFLOW_CONNECT_RETRIES", "3"))
+                for _attempt in range(1, _mlflow_retries + 1):
+                    try:
+                        model = mlflow.pyfunc.load_model(model_path)
+                        logger.info("Loaded MLflow model: %s", model_path)
+                        break
+                    except Exception as _mlflow_err:
+                        if _attempt < _mlflow_retries:
+                            logger.warning(
+                                "MLflow connection attempt %d/%d failed: %s — retrying",
+                                _attempt, _mlflow_retries, _mlflow_err,
+                            )
+                            import time as _time
+                            _time.sleep(2 ** _attempt)
+                        else:
+                            raise
             else:
                 # Fallback: load sklearn/pickle model
                 import joblib
@@ -438,6 +453,8 @@ async def health_check() -> HealthResponse:
     warnings = []
     if not registry.is_loaded:
         warnings.append("Model not loaded — inference unavailable")
+    if not MLFLOW_AVAILABLE:
+        warnings.append("MLflow unavailable — running without experiment tracking")
 
     return HealthResponse(
         status="healthy" if registry.is_loaded else "degraded",

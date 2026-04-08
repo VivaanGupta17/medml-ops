@@ -10,6 +10,7 @@
 #              medml-ops/serving:latest
 # =============================================================================
 
+# pinned to 3.10.14 — do not bump without re-validating FHIR client compat
 FROM python:3.10.14-slim-bookworm AS base
 
 LABEL maintainer="MedML-Ops Team"

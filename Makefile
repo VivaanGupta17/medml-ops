@@ -20,6 +20,7 @@ CONFIG ?= configs/pipeline_config.yaml
 STEPS  ?= validate,train,evaluate,bias,regression,gmlp,model_card,report
 PORT   ?= 8000
 MODEL  ?= models/current
+MODEL_REGISTRY ?= $(MODEL_REGISTRY_PATH)
 
 PYTHON := python
 PIP    := pip
